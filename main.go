@@ -77,6 +77,7 @@ func addBuildHandler(writer http.ResponseWriter, request *http.Request) {
 	_ = json.NewDecoder(request.Body).Decode(&build)
 
 	build.Uuid = uuid.Must(uuid.NewV4()).String();
+	build.Done = false
 
 	go startBuildProcess(&build)
 
@@ -105,6 +106,7 @@ func startBuildProcess(item *BuildItem)  {
 	for _, build := range builds {
 		if build.Uuid == item.Uuid {
 			build.IpAddress = insp.NetworkSettings.IPAddress
+			build.Done = true
 		}
 		tmpBuilds = append(tmpBuilds, build)
 	}
