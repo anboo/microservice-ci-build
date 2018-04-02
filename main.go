@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"encoding/json"
 	"github.com/satori/go.uuid"
+	"bufio"
+	"os"
 )
 
 type Error struct {
@@ -40,6 +42,7 @@ type BuildItem struct {
 	DockerImage string `json:"docker_image"`
 	IpAddress string `json:"ip_address"`
 	Done bool `json:"done"`
+	Logs []string `json:"logs"`
 }
 
 var builds []BuildItem
@@ -86,6 +89,32 @@ func addBuildHandler(writer http.ResponseWriter, request *http.Request) {
 	writer.Write(Serialize(build))
 }
 
+func updateBuildItems(item BuildItem) {
+	tmpBuilds := []BuildItem{}
+
+	for _, build := range builds {
+		if build.Uuid == item.Uuid {
+			tmpBuilds = append(tmpBuilds, item)
+		} else {
+			tmpBuilds = append(tmpBuilds, build)
+		}
+	}
+
+	builds = tmpBuilds
+}
+
+func createBuildItemFromLinkRef(link *BuildItem) BuildItem {
+	return BuildItem{
+		Uuid: link.Uuid,
+		Logs: link.Logs,
+		DockerImage: link.DockerImage,
+		Done: link.Done,
+		IpAddress: link.IpAddress,
+		ProjectId: link.ProjectId,
+		Tasks: link.Tasks,
+	}
+}
+
 func startBuildProcess(item *BuildItem)  {
 	imageName := item.DockerImage
 
@@ -96,21 +125,38 @@ func startBuildProcess(item *BuildItem)  {
 	defer out.Close();
 	//io.Copy(os.Stdout, out)
 
+	jobs := make(chan string)
+
+	go func() {
+		scanner := bufio.NewScanner(out)
+		for scanner.Scan() {
+			jobs <- scanner.Text()
+		}
+	}()
+
+	go func(link *BuildItem) {
+		msg := <- jobs
+
+		os.Stdout.WriteString("\r\n FROM GOROUTINE: " + msg)
+		link.Logs = append(link.Logs, msg)
+
+		updateBuildItems(createBuildItemFromLinkRef(link))
+	}(item)
+
 	resp, err := cli.ContainerCreate(ctx, &container.Config{ Image: imageName }, nil, nil, ""); if err != nil { panic(err) }
 	if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil { panic(err) }
 
 	insp, _ := cli.ContainerInspect(ctx, resp.ID)
 	item.IpAddress = insp.NetworkSettings.IPAddress
 
-	tmpBuilds := []BuildItem{}
 	for _, build := range builds {
 		if build.Uuid == item.Uuid {
 			build.IpAddress = insp.NetworkSettings.IPAddress
 			build.Done = true
+
+			updateBuildItems(build)
 		}
-		tmpBuilds = append(tmpBuilds, build)
 	}
-	builds = tmpBuilds
 
 	defer cli.Close();
 	//cli.ContainerKill(ctx, resp.ID, "9");
